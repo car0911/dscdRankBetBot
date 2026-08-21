@@ -288,110 +288,110 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    if message.content.startswith(PREFIX):
+    content_body = message.content.strip()
 
-        content_body = message.content[len(PREFIX):].strip()
+    # 1. 점수 입력 (-23, +23, 23 등)인지 먼저 확인
+    match = re.match(
+        r"^([+-]?)(\d+)$",
+        content_body
+    )
 
-        match = re.match(
-            r"^([+-]?|0)(\d+)$",
-            content_body
+    if match:
+        sign = match.group(1)
+        num = int(match.group(2))
+
+        # 기호가 '-'이면 음수, 아니면 양수(+, 혹은 기호 생략)
+        points = (
+            -num
+            if sign == "-"
+            else num
         )
 
-        if match:
+        user_id_str = str(
+            message.author.id
+        )
 
-            sign = match.group(1)
-            num = int(match.group(2))
-
-            points = (
-                -num
-                if sign in ["-", "0"]
-                else num
-            )
-
-            user_id_str = str(
-                message.author.id
-            )
-
-            # 팀 소속 확인
-            if user_id_str not in user_team:
-
-                await message.channel.send(
-                    f"❌ {message.author.mention}님은 "
-                    f"소속된 팀이 없습니다."
-                )
-
-                return
-
-            my_team = user_team[user_id_str]
-
-            # 팀 존재 여부 확인
-            if my_team not in teams:
-
-                await message.channel.send(
-                    "❌ 소속된 팀 정보를 찾을 수 없습니다."
-                )
-
-                return
-
-            # 팀 점수 변경
-            teams[my_team]["score"] += points
-
-            # 개인 점수 변경
-            if user_id_str not in teams[my_team]["members"]:
-                teams[my_team]["members"][user_id_str] = 0
-
-            teams[my_team]["members"][user_id_str] += points
-
-            save_data()
-
-            team_score = teams[my_team]["score"]
-
-            my_score = teams[my_team]["members"][user_id_str]
-
-            sign_str = (
-                f"+{points}"
-                if points > 0
-                else f"{points}"
-            )
+        # 팀 소속 확인
+        if user_id_str not in user_team:
 
             await message.channel.send(
-                f"📈 {my_team} 점수 변동: "
-                f"{sign_str}점\n"
-                f"> 🏆 팀 총점: {team_score}점 | "
-                f"👤 {message.author.display_name} "
-                f"개인 점수: {my_score}점"
+                f"❌ {message.author.mention}님은 "
+                f"소속된 팀이 없습니다."
             )
-
-            # 내기 진행 중인지 확인
-            if (
-                match_data["is_active"]
-                and my_team in match_data["participating_teams"]
-            ):
-
-                if team_score >= match_data["target_score"]:
-
-                    await message.channel.send(
-                        f"\n🎉🎉 축하합니다! "
-                        f"'{my_team}' 팀이 "
-                        f"목표 점수("
-                        f"{match_data['target_score']}점"
-                        f")에 가장 먼저 도달했습니다! 🎉🎉"
-                    )
-
-                    await match_result_display(
-                        message.channel
-                    )
-
-                    reset_all_data()
-
-                    await message.channel.send(
-                        "🧹 내기가 종료되어 "
-                        "모든 팀이 해산되고 "
-                        "점수가 초기화되었습니다."
-                    )
 
             return
 
+        my_team = user_team[user_id_str]
+
+        # 팀 존재 여부 확인
+        if my_team not in teams:
+
+            await message.channel.send(
+                "❌ 소속된 팀 정보를 찾을 수 없습니다."
+            )
+
+            return
+
+        # 팀 점수 변경
+        teams[my_team]["score"] += points
+
+        # 개인 점수 변경
+        if user_id_str not in teams[my_team]["members"]:
+            teams[my_team]["members"][user_id_str] = 0
+
+        teams[my_team]["members"][user_id_str] += points
+
+        save_data()
+
+        team_score = teams[my_team]["score"]
+
+        my_score = teams[my_team]["members"][user_id_str]
+
+        sign_str = (
+            f"+{points}"
+            if points > 0
+            else f"{points}"
+        )
+
+        await message.channel.send(
+            f"📈 {my_team} 점수 변동: "
+            f"{sign_str}점\n"
+            f"> 🏆 팀 총점: {team_score}점 | "
+            f"👤 {message.author.display_name} "
+            f"개인 점수: {my_score}점"
+        )
+
+        # 내기 진행 중인지 확인
+        if (
+            match_data["is_active"]
+            and my_team in match_data["participating_teams"]
+        ):
+
+            if team_score >= match_data["target_score"]:
+
+                await message.channel.send(
+                    f"\n🎉🎉 축하합니다! "
+                    f"'{my_team}' 팀이 "
+                    f"목표 점수("
+                    f"{match_data['target_score']}점"
+                    f")에 가장 먼저 도달했습니다! 🎉🎉"
+                )
+
+                await match_result_display(
+                    message.channel
+                )
+
+                reset_all_data()
+
+                await message.channel.send(
+                    "🧹 내기가 종료되어 "
+                    "모든 팀이 해산되고 "
+                    "점수가 초기화되었습니다."
+                )
+
+        return
+
+    # 2. 점수 입력이 아니라면 일반 봇 명령어(!팀생성, !명령어 등) 처리 수행
     await bot.process_commands(message)
 
 
@@ -894,7 +894,7 @@ async def show_help(ctx):
     )
 
     await ctx.send(embed=embed)
-    
+
 
 # ==========================================
 # ❌ 명령어 오류 처리
