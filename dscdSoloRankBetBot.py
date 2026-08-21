@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands
 import asyncio
@@ -373,20 +374,28 @@ async def create_team(
 async def join_team(
     ctx,
     team_name: str,
-    member: discord.Member = None
+    *members: discord.Member
 ):
-    target_user = (
-        member
-        if member
-        else ctx.author
+    if team_name not in teams:
+        await ctx.send(
+            f"❌ '{team_name}'(은)는 "
+            f"존재하지 않는 팀입니다."
+        )
+        return
+
+    target_members = (
+        list(members)
+        if members
+        else [ctx.author]
     )
 
-    user_id_str = str(
-        target_user.id
+    is_registering_others = any(
+        m.id != ctx.author.id
+        for m in target_members
     )
 
     if (
-        member
+        is_registering_others
         and not ctx.author.guild_permissions.administrator
     ):
         await ctx.send(
@@ -395,30 +404,99 @@ async def join_team(
         )
         return
 
-    if team_name not in teams:
-        await ctx.send(
-            f"❌ '{team_name}'(은)는 "
-            f"존재하지 않는 팀입니다."
+    registered_names = []
+
+    for target_user in target_members:
+        user_id_str = str(
+            target_user.id
         )
-        return
 
-    if user_id_str in user_team:
-        old_team = user_team[user_id_str]
-        if old_team in teams and user_id_str in teams[old_team]["members"]:
-            del teams[old_team]["members"][user_id_str]
+        if user_id_str in user_team:
+            old_team = user_team[user_id_str]
+            if (
+                old_team in teams
+                and user_id_str in teams[old_team]["members"]
+            ):
+                del teams[old_team]["members"][user_id_str]
 
-    teams[team_name]["members"][user_id_str] = 0
-    user_team[user_id_str] = team_name
+        teams[team_name]["members"][user_id_str] = 0
+        user_team[user_id_str] = team_name
+        registered_names.append(
+            target_user.mention
+        )
 
     save_data()
 
     await ctx.send(
-        f"✅ {target_user.mention}님이 "
+        f"✅ {', '.join(registered_names)}님이 "
         f"'{team_name}' 팀에 등록되었습니다."
     )
 
 # ==========================================
-# 🔥 내기 시작 (월일시각 자동 ID 생성 및 복수 내기 지원)
+# 📋 팀 명단 / 팀 목록 조회
+# ==========================================
+
+@bot.command(
+    name="팀명단",
+    aliases=["팀목록"]
+)
+async def show_teams(ctx):
+    if not teams:
+        await ctx.send(
+            "⚠️ 현재 생성된 팀이 없습니다."
+        )
+        return
+
+    embed = discord.Embed(
+        title="👥 전체 팀 및 팀원 명단",
+        color=discord.Color.blue()
+    )
+
+    for team_name, data in teams.items():
+        team_score = data.get(
+            "score",
+            0
+        )
+        members_dict = data.get(
+            "members",
+            {}
+        )
+
+        member_texts = []
+
+        for uid_str, p_score in members_dict.items():
+            try:
+                user = ctx.guild.get_member(
+                    int(uid_str)
+                )
+                name = (
+                    user.display_name
+                    if user
+                    else "알수없음"
+                )
+            except Exception:
+                name = "알수없음"
+
+            member_texts.append(
+                f"{name} ({p_score}점)"
+            )
+
+        members_str = (
+            ", ".join(member_texts)
+            if member_texts
+            else "팀원 없음"
+        )
+
+        embed.add_field(
+            name=f"🛡️ {team_name} (총점: {team_score}점)",
+            value=f"└ 팀원: {members_str}",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+# ==========================================
+# 🔥 내기 시작
 # ==========================================
 
 @bot.command(name="내기시작")
@@ -426,10 +504,10 @@ async def start_match(
     ctx,
     *args
 ):
-    if len(args) < 2:
+    if len(args) < 3:
         await ctx.send(
             "⚠️ 사용법:\n"
-            "`!내기시작 [팀1] [팀2] [목표점수]` (내기 이름 자동생성: 월일시각, 예: 082119)\n"
+            "`!내기시작 [팀1] [팀2] [목표점수]` (내기 이름 자동생성: 월일시각)\n"
             "`!내기시작 [내기이름] [팀1] [팀2] [목표점수]`"
         )
         return
@@ -446,18 +524,36 @@ async def start_match(
         return
 
     middle_args = args[:-1]
-    now_str = datetime.now().strftime("%m%d%H")
 
-    if len(middle_args) >= 2 and middle_args[0] not in teams:
+    now_str = datetime.now(
+        ZoneInfo("Asia/Seoul")
+    ).strftime("%m%d%H")
+
+    if middle_args[0] not in teams:
         match_id = middle_args[0]
-        participating_teams = list(middle_args[1:])
+        participating_teams = list(
+            middle_args[1:]
+        )
     else:
         match_id = now_str
-        participating_teams = list(middle_args)
+        participating_teams = list(
+            middle_args
+        )
+
+    if len(participating_teams) < 2:
+        await ctx.send(
+            "❌ 내기에 참여할 팀은 "
+            "최소 2개 이상이어야 합니다."
+        )
+        return
 
     base_id = match_id
     counter = 1
-    while any(m["match_id"] == match_id for m in active_matches):
+
+    while any(
+        m["match_id"] == match_id
+        for m in active_matches
+    ):
         match_id = f"{base_id}_{counter}"
         counter += 1
 
@@ -470,7 +566,9 @@ async def start_match(
             return
 
     participating_teams = list(
-        dict.fromkeys(participating_teams)
+        dict.fromkeys(
+            participating_teams
+        )
     )
 
     new_match = {
