@@ -240,7 +240,7 @@ async def on_ready():
         )
 
 # ==========================================
-# 💬 메시지 처리 (느낌표 없이 숫자 입력 시 점수 반영)
+# 💬 메시지 처리 (타 사용자 점수 변동 지원)
 # ==========================================
 
 @bot.event
@@ -250,34 +250,41 @@ async def on_message(message):
 
     content_body = message.content.strip()
 
-    # 1. 점수 입력 (-23, +23, 23 등)인지 먼저 확인
+    # 정규식: 부호(+,-,0) + 숫자 + (선택적) 멘션
     match = re.match(
-        r"^([+-]?)(\d+)$",
+        r"^([+0-]?)\s*(\d+)(?:\s+<@!?\d+>)?\s*$",
         content_body
     )
 
     if match:
-        sign = match.group(1)
-        num = int(match.group(2))
+        prefix = match.group(1)
+        raw_num = match.group(2)
+        num = int(raw_num)
 
-        points = (
-            -num
-            if sign == "-"
-            else num
+        # [핵심 로직] 멘션된 사용자가 있으면 대상 변경, 없으면 본인
+        target_user = (
+            message.mentions[0]
+            if message.mentions
+            else message.author
         )
 
-        user_id_str = str(
-            message.author.id
+        if prefix in ("0", "-"):
+            points = -num
+        else:
+            points = num
+
+        target_id_str = str(
+            target_user.id
         )
 
-        if user_id_str not in user_team:
+        if target_id_str not in user_team:
             await message.channel.send(
-                f"❌ {message.author.mention}님은 "
+                f"❌ {target_user.mention}님은 "
                 f"소속된 팀이 없습니다."
             )
             return
 
-        my_team = user_team[user_id_str]
+        my_team = user_team[target_id_str]
 
         if my_team not in teams:
             await message.channel.send(
@@ -285,34 +292,33 @@ async def on_message(message):
             )
             return
 
-        # 팀 점수 및 개인 점수 변경
+        # 점수 반영 (대상 유저 기준)
         teams[my_team]["score"] += points
 
-        if user_id_str not in teams[my_team]["members"]:
-            teams[my_team]["members"][user_id_str] = 0
+        if target_id_str not in teams[my_team]["members"]:
+            teams[my_team]["members"][target_id_str] = 0
 
-        teams[my_team]["members"][user_id_str] += points
+        teams[my_team]["members"][target_id_str] += points
 
         save_data()
 
         team_score = teams[my_team]["score"]
-        my_score = teams[my_team]["members"][user_id_str]
+        target_score = teams[my_team]["members"][target_id_str]
 
         sign_str = (
-            f"+{points}"
-            if points > 0
-            else f"{points}"
+            f"{points}"
+            if points < 0
+            else f"+{points}"
         )
 
         await message.channel.send(
             f"📈 {my_team} 점수 변동: "
             f"{sign_str}점\n"
             f"> 🏆 팀 총점: {team_score}점 | "
-            f"👤 {message.author.display_name} "
-            f"개인 점수: {my_score}점"
+            f"👤 {target_user.display_name} "
+            f"개인 점수: {target_score}점"
         )
 
-        # 진행 중인 내기들 중 참여 중인 내기의 목표 달성 체크
         completed_matches = []
         for match_item in active_matches:
             if my_team in match_item["participating_teams"]:
@@ -336,7 +342,6 @@ async def on_message(message):
 
         return
 
-    # 2. 점수 입력이 아니라면 일반 봇 명령어 처리 수행
     await bot.process_commands(message)
 
 # ==========================================
@@ -731,8 +736,9 @@ async def show_help(ctx):
         name="👥 팀 및 등록",
         value=(
             "`!팀생성 [팀이름]` - 새로운 팀을 만듭니다.\n"
-            "`!팀등록 [팀이름]` - 해당 팀에 가입합니다. (본인)\n"
-            "`!팀등록 [팀이름] @멘션` - 다른 멤버를 팀에 등록합니다. (관리자 전용)"
+            "`!팀등록 [팀이름]` - 본인을 해당 팀에 등록합니다.\n"
+            "`!팀등록 [팀이름] @사용자1 @사용자2` - 여러 명을 한 번에 팀에 등록합니다. (관리자 전용)\n"
+            "`!팀명단` (또는 `!팀목록`) - 생성된 모든 팀과 소속 팀원, 점수를 확인합니다."
         ),
         inline=False
     )
@@ -740,9 +746,11 @@ async def show_help(ctx):
     embed.add_field(
         name="🔥 내기 및 점수",
         value=(
-            "`!내기시작 [팀1] [팀2] ... [목표점수]` - 내기를 시작합니다. (이름 미지정 시 월일시각 자동생성)\n"
-            "`!내기시작 [내기이름] [팀1] [팀2] ... [목표점수]` - 이름을 지정하여 내기를 시작합니다.\n"
-            "`+점수` 또는 `-점수` (예: `+15`, `-10`, `23`) - 채팅창에 입력하면 팀과 본인 점수가 반영됩니다.\n"
+            "`!내기시작 [팀1] [팀2] [목표점수]` - 내기를 시작합니다. (내기 이름 미지정 시 한국 시간 기준 월일시각 자동 생성)\n"
+            "`!내기시작 [내기이름] [팀1] [팀2] [목표점수]` - 이름을 지정하여 내기를 시작합니다.\n"
+            "`숫자` 또는 `+숫자` - 점수를 획득합니다. (예: `23`, `+23`)\n"
+            "`0숫자` 또는 `-숫자` - 점수가 차감됩니다. (예: `023`, `-23`)\n"
+            "`[점수] @사용자명` - 다른 사람의 점수를 대신 변동시킵니다. (예: `23 @홍길동`, `023 @홍길동`)\n"
             "`!현황` - 현재 진행 중인 모든 내기의 순위와 점수 차이를 확인합니다."
         ),
         inline=False
@@ -751,8 +759,7 @@ async def show_help(ctx):
     embed.add_field(
         name="⚙️ 관리자 전용",
         value=(
-            "`!내기종료` - 진행 중인 내기가 1개일 때 강제 종료합니다.\n"
-            "`!내기종료 [내기ID]` - 특정 내기를 지정하여 강제로 종료합니다."
+            "`!내기종료` - 진행 중인 내기를 강제 종료합니다. (ID 지정 가능)"
         ),
         inline=False
     )
