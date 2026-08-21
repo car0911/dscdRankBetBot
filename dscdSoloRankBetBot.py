@@ -861,8 +861,8 @@ async def show_help(ctx):
         title="🤖 솔랭 내기 봇 명령어 안내",
         description="사용 가능한 명령어와 설명입니다.",
         color=discord.Color.blue()
-    ]
-    
+    )
+
     embed.add_field(
         name="👥 팀 및 등록",
         value=(
@@ -872,7 +872,7 @@ async def show_help(ctx):
         ),
         inline=False
     )
-    
+
     embed.add_field(
         name="🔥 내기 및 점수",
         value=(
@@ -884,7 +884,7 @@ async def show_help(ctx):
         ),
         inline=False
     )
-    
+
     embed.add_field(
         name="⚙️ 관리자 전용",
         value=(
@@ -892,7 +892,7 @@ async def show_help(ctx):
         ),
         inline=False
     )
-    
+
     await ctx.send(embed=embed)
     
 
