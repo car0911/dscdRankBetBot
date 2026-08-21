@@ -595,15 +595,13 @@ async def start_match(
     )
 
 # ==========================================
-# 📈 현황 (모든 진행 중인 내기 한 번에 조회)
+# 📈 현황
 # ==========================================
 
 @bot.command(name="현황")
 async def match_status(ctx):
     if not active_matches:
-        await ctx.send(
-            "⚠️ 현재 진행 중인 내기가 없습니다."
-        )
+        await ctx.send("⚠️ 현재 진행 중인 내기가 없습니다.")
         return
 
     embed = discord.Embed(
@@ -616,6 +614,7 @@ async def match_status(ctx):
         target_score = match_item["target_score"]
         participating_teams = match_item["participating_teams"]
 
+        # 점수가 높은 순서대로 팀 정렬
         sorted_teams = sorted(
             participating_teams,
             key=lambda t: teams.get(t, {}).get("score", 0),
@@ -623,37 +622,39 @@ async def match_status(ctx):
         )
 
         team_status_lines = []
+        top_score = 0
+
         for i, team_name in enumerate(sorted_teams):
             team_score = teams.get(team_name, {}).get("score", 0)
+
+            # 1등 점수 기록
+            if i == 0:
+                top_score = team_score
+
             left = target_score - team_score
+
+            # [수정] 1등이 아닐 경우 1등과의 점수 차이 계산
+            if i == 0:
+                score_diff_text = f"목표까지 {left}점"
+            else:
+                diff = top_score - team_score
+                score_diff_text = f"1등까지 -{diff}점 / 목표까지 {left}점"
 
             member_texts = []
             team_members = teams.get(team_name, {}).get("members", {})
             for uid_str, personal_score in team_members.items():
                 try:
-                    user = ctx.guild.get_member(
-                        int(uid_str)
-                    )
-                    name = (
-                        user.display_name
-                        if user
-                        else "알수없음"
-                    )
+                    user = ctx.guild.get_member(int(uid_str))
+                    name = user.display_name if user else "알수없음"
                 except Exception:
                     name = "알수없음"
 
-                member_texts.append(
-                    f"{name} ({personal_score}점)"
-                )
+                member_texts.append(f"{name} ({personal_score}점)")
 
-            members_str = (
-                ", ".join(member_texts)
-                if member_texts
-                else "팀원 없음"
-            )
+            members_str = ", ".join(member_texts) if member_texts else "팀원 없음"
 
             team_status_lines.append(
-                f"{i + 1}위: {team_name} ({team_score}점 / 목표까지 {left}점)\n└ 팀원: {members_str}"
+                f"{i + 1}위: {team_name} ({team_score}점 / {score_diff_text})\n└ 팀원: {members_str}"
             )
 
         embed.add_field(
