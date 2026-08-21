@@ -503,6 +503,39 @@ async def show_teams(ctx):
     await ctx.send(embed=embed)
 
 # ==========================================
+# 🗑️ 팀원 삭제
+# ==========================================
+
+@bot.command(name="팀원삭제")
+async def remove_member(ctx, team_name: str, member: discord.Member):
+    # 1. 팀 존재 여부 확인
+    if team_name not in teams:
+        await ctx.send(f"❌ '{team_name}' 팀을 찾을 수 없습니다.")
+        return
+
+    member_id_str = str(member.id)
+
+    # 2. 해당 팀에 사용자가 있는지 확인
+    if member_id_str not in teams[team_name]["members"]:
+        await ctx.send(f"❌ {member.mention}님은 '{team_name}' 팀에 등록되어 있지 않습니다.")
+        return
+
+    # 3. 점수 계산 (삭제 시 팀 점수에서 해당 멤버의 점수만큼 차감)
+    member_score = teams[team_name]["members"][member_id_str]
+    teams[team_name]["score"] -= member_score
+
+    # 4. 데이터 삭제
+    del teams[team_name]["members"][member_id_str]
+    del user_team[member_id_str]
+
+    save_data()
+
+    await ctx.send(
+        f"✅ '{team_name}' 팀에서 {member.mention}님을 삭제했습니다.\n"
+        f"└ 차감된 팀 점수: {member_score}점"
+    )
+
+# ==========================================
 # 🔥 내기 시작
 # ==========================================
 
@@ -614,7 +647,6 @@ async def match_status(ctx):
         target_score = match_item["target_score"]
         participating_teams = match_item["participating_teams"]
 
-        # 점수가 높은 순서대로 팀 정렬
         sorted_teams = sorted(
             participating_teams,
             key=lambda t: teams.get(t, {}).get("score", 0),
@@ -627,34 +659,34 @@ async def match_status(ctx):
         for i, team_name in enumerate(sorted_teams):
             team_score = teams.get(team_name, {}).get("score", 0)
 
-            # 1등 점수 기록
             if i == 0:
                 top_score = team_score
 
             left = target_score - team_score
 
-            # [수정] 1등이 아닐 경우 1등과의 점수 차이 계산
             if i == 0:
                 score_diff_text = f"목표까지 {left}점"
             else:
+                # [수정] 1등 점수에서 내 점수를 빼면 따라잡아야 할 양수 점수(+)가 나옵니다.
                 diff = top_score - team_score
-                score_diff_text = f"1등까지 -{diff}점 / 목표까지 {left}점"
+                score_diff_text = f"1등까지 +{diff}점 / 목표까지 {left}점"
 
             member_texts = []
             team_members = teams.get(team_name, {}).get("members", {})
-            for uid_str, personal_score in team_members.items():
+            for uid_str, p_score in team_members.items():
                 try:
                     user = ctx.guild.get_member(int(uid_str))
                     name = user.display_name if user else "알수없음"
                 except Exception:
                     name = "알수없음"
 
-                member_texts.append(f"{name} ({personal_score}점)")
+                member_texts.append(f"{name} ({p_score}점)")
 
             members_str = ", ".join(member_texts) if member_texts else "팀원 없음"
 
             team_status_lines.append(
-                f"{i + 1}위: {team_name} ({team_score}점 / {score_diff_text})\n└ 팀원: {members_str}"
+                f"{i + 1}위: {team_name} ({team_score}점 / {score_diff_text})\n"
+                f"└ 팀원: {members_str}"
             )
 
         embed.add_field(
@@ -663,9 +695,7 @@ async def match_status(ctx):
             inline=False
         )
 
-    await ctx.send(
-        embed=embed
-    )
+    await ctx.send(embed=embed)
 
 # ==========================================
 # 🛑 내기 종료 (특정 ID 지정 가능)
@@ -741,6 +771,7 @@ async def show_help(ctx):
             "`!팀생성 [팀이름]` - 새로운 팀을 만듭니다.\n"
             "`!팀등록 [팀이름]` - 본인을 해당 팀에 등록합니다.\n"
             "`!팀등록 [팀이름] @사용자1 @사용자2` - 여러 명을 한 번에 팀에 등록합니다. (관리자 전용)\n"
+            "`!팀원삭제 [팀이름] @사용자명` - 특정 팀원에서 사용자를 제거하고 점수를 정산합니다.\n"
             "`!팀명단` (또는 `!팀목록`) - 생성된 모든 팀과 소속 팀원, 점수를 확인합니다."
         ),
         inline=False
