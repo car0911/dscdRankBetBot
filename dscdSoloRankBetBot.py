@@ -59,7 +59,7 @@ db_client = mongo_client["discord_bet_bot"]
 collection = db_client["bet_data"]
 
 # ==========================================
-# 📦 DB에서 데이터 불러오기 (복수 active_matches 지원 구조)
+# 📦 DB에서 데이터 불러오기
 # ==========================================
 
 try:
@@ -69,12 +69,14 @@ try:
         teams = doc.get("teams", {})
         user_team = doc.get("user_team", {})
 
-        # 기존 단일 match_data 또는 복수 active_matches 호환 처리
-        raw_match = doc.get("match_data", {})
-        if isinstance(raw_match, dict) and "is_active" in raw_match:
-            active_matches = [raw_match] if raw_match.get("is_active") else []
-        else:
-            active_matches = doc.get("active_matches", [])
+        # 복수 active_matches를 우선적으로 불러오도록 수정
+        active_matches = doc.get("active_matches", [])
+
+        # active_matches가 비어있고 예전 방식인 match_data가 남아있는 경우 호환 처리
+        if not active_matches and "match_data" in doc:
+            raw_match = doc.get("match_data", {})
+            if isinstance(raw_match, dict) and raw_match.get("is_active"):
+                active_matches = [raw_match]
 
         print("✅ 기존 데이터를 MongoDB에서 불러왔습니다.")
 
