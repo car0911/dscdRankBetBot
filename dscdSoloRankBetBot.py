@@ -1,7 +1,8 @@
+import os
+import re
+from datetime import datetime
 import discord
 from discord.ext import commands
-import re
-import os
 import asyncio
 import aiohttp
 from aiohttp import web
@@ -20,7 +21,6 @@ if not DISCORD_TOKEN:
 if not MONGO_URI:
     raise RuntimeError("🚨 MONGODB_URI 환경변수가 설정되지 않았습니다.")
 
-
 # ==========================================
 # 🤖 Discord Bot 설정
 # ==========================================
@@ -36,7 +36,6 @@ bot = commands.Bot(
     intents=intents
 )
 
-
 # ==========================================
 # 💾 MongoDB 연결 및 초기화
 # ==========================================
@@ -49,21 +48,17 @@ try:
         serverSelectionTimeoutMS=10000
     )
 
-    # 실제 연결 확인
     mongo_client.admin.command("ping")
-
     print("✅ MongoDB 연결 성공!")
 
 except Exception as e:
     raise RuntimeError(f"🚨 MongoDB 연결 실패: {e}")
 
-
 db_client = mongo_client["discord_bet_bot"]
 collection = db_client["bet_data"]
 
-
 # ==========================================
-# 📦 DB에서 데이터 불러오기
+# 📦 DB에서 데이터 불러오기 (복수 active_matches 지원 구조)
 # ==========================================
 
 try:
@@ -73,36 +68,24 @@ try:
         teams = doc.get("teams", {})
         user_team = doc.get("user_team", {})
 
-        match_data = doc.get(
-            "match_data",
-            {
-                "is_active": False,
-                "target_score": 0,
-                "participating_teams": []
-            }
-        )
+        # 기존 단일 match_data 또는 복수 active_matches 호환 처리
+        raw_match = doc.get("match_data", {})
+        if isinstance(raw_match, dict) and "is_active" in raw_match:
+            active_matches = [raw_match] if raw_match.get("is_active") else []
+        else:
+            active_matches = doc.get("active_matches", [])
 
         print("✅ 기존 데이터를 MongoDB에서 불러왔습니다.")
 
     else:
         teams = {}
         user_team = {}
-
-        match_data = {
-            "is_active": False,
-            "target_score": 0,
-            "participating_teams": []
-        }
+        active_matches = []
 
         print("ℹ️ 기존 데이터가 없어 새 데이터로 시작합니다.")
 
 except Exception as e:
     raise RuntimeError(f"🚨 MongoDB 데이터 불러오기 실패: {e}")
-
-
-# ==========================================
-# 💾 데이터 저장
-# ==========================================
 
 def save_data():
     try:
@@ -112,43 +95,32 @@ def save_data():
                 "$set": {
                     "teams": teams,
                     "user_team": user_team,
-                    "match_data": match_data
+                    "active_matches": active_matches
                 }
             },
             upsert=True
         )
-
     except Exception as e:
         print(f"🚨 MongoDB 저장 실패: {e}")
-
-
-# ==========================================
-# 🧹 전체 데이터 초기화
-# ==========================================
 
 def reset_all_data():
     teams.clear()
     user_team.clear()
-
-    match_data["is_active"] = False
-    match_data["target_score"] = 0
-    match_data["participating_teams"].clear()
-
+    active_matches.clear()
     save_data()
 
-
 # ==========================================
-# 🏆 경기 결과 표시
+# 🏆 경기 결과 표시 (특정 내기 대상)
 # ==========================================
 
-async def match_result_display(channel):
-
-    if not match_data["participating_teams"]:
+async def match_result_display(channel, match_item):
+    participating_teams = match_item.get("participating_teams", [])
+    if not participating_teams:
         return
 
     sorted_teams = sorted(
-        match_data["participating_teams"],
-        key=lambda t: teams[t]["score"],
+        participating_teams,
+        key=lambda t: teams.get(t, {}).get("score", 0),
         reverse=True
     )
 
@@ -164,7 +136,6 @@ async def match_result_display(channel):
     result_lines = []
 
     for i, team_name in enumerate(sorted_teams):
-
         rank_tag = (
             ranks[i]
             if i < len(ranks)
@@ -172,38 +143,36 @@ async def match_result_display(channel):
         )
 
         member_names = []
+        team_members = teams.get(team_name, {}).get("members", {})
 
-        for uid_str in teams[team_name]["members"]:
-
+        for uid_str in team_members:
             try:
                 user = bot.get_user(int(uid_str))
-
                 if user:
                     name = user.display_name
                 else:
                     name = "알수없음"
-
             except Exception:
                 name = "알수없음"
 
             member_names.append(name)
 
         member_string = " ".join(member_names)
+        t_score = teams.get(team_name, {}).get("score", 0)
 
         result_lines.append(
             f"{rank_tag} '{team_name}' "
             f"{member_string} "
-            f"({teams[team_name]['score']}점)"
+            f"({t_score}점)"
         )
 
     embed = discord.Embed(
-        title="🏆 최종 내기 결과 🏆",
+        title=f"🏆 내기 결과 [{match_item['match_id']}] 🏆",
         description="\n\n".join(result_lines),
         color=discord.Color.gold()
     )
 
     await channel.send(embed=embed)
-
 
 # ==========================================
 # 🌐 Render Health Check 서버
@@ -215,9 +184,7 @@ async def health_check(request):
         status=200
     )
 
-
 async def start_web_server():
-
     app = web.Application()
 
     app.router.add_get(
@@ -231,7 +198,6 @@ async def start_web_server():
     )
 
     runner = web.AppRunner(app)
-
     await runner.setup()
 
     port = int(
@@ -254,37 +220,30 @@ async def start_web_server():
         f"0.0.0.0:{port} 에서 실행 중입니다."
     )
 
-
 # ==========================================
 # 🤖 Bot Ready
 # ==========================================
 
 @bot.event
 async def on_ready():
-
     print("=" * 50)
     print(f"✅ Discord 로그인 성공!")
     print(f"🤖 Bot: {bot.user}")
     print(f"🆔 Bot ID: {bot.user.id}")
     print("=" * 50)
 
-    # 웹 서버가 중복 실행되지 않도록 확인
     if not hasattr(bot, "web_server_started"):
-
         bot.web_server_started = True
-
         bot.loop.create_task(
             start_web_server()
         )
 
-
 # ==========================================
-# 💬 메시지 처리
+# 💬 메시지 처리 (느낌표 없이 숫자 입력 시 점수 반영)
 # ==========================================
 
 @bot.event
 async def on_message(message):
-
     if message.author == bot.user:
         return
 
@@ -300,7 +259,6 @@ async def on_message(message):
         sign = match.group(1)
         num = int(match.group(2))
 
-        # 기호가 '-'이면 음수, 아니면 양수(+, 혹은 기호 생략)
         points = (
             -num
             if sign == "-"
@@ -311,31 +269,24 @@ async def on_message(message):
             message.author.id
         )
 
-        # 팀 소속 확인
         if user_id_str not in user_team:
-
             await message.channel.send(
                 f"❌ {message.author.mention}님은 "
                 f"소속된 팀이 없습니다."
             )
-
             return
 
         my_team = user_team[user_id_str]
 
-        # 팀 존재 여부 확인
         if my_team not in teams:
-
             await message.channel.send(
                 "❌ 소속된 팀 정보를 찾을 수 없습니다."
             )
-
             return
 
-        # 팀 점수 변경
+        # 팀 점수 및 개인 점수 변경
         teams[my_team]["score"] += points
 
-        # 개인 점수 변경
         if user_id_str not in teams[my_team]["members"]:
             teams[my_team]["members"][user_id_str] = 0
 
@@ -344,7 +295,6 @@ async def on_message(message):
         save_data()
 
         team_score = teams[my_team]["score"]
-
         my_score = teams[my_team]["members"][user_id_str]
 
         sign_str = (
@@ -361,39 +311,32 @@ async def on_message(message):
             f"개인 점수: {my_score}점"
         )
 
-        # 내기 진행 중인지 확인
-        if (
-            match_data["is_active"]
-            and my_team in match_data["participating_teams"]
-        ):
+        # 진행 중인 내기들 중 참여 중인 내기의 목표 달성 체크
+        completed_matches = []
+        for match_item in active_matches:
+            if my_team in match_item["participating_teams"]:
+                if team_score >= match_item["target_score"]:
+                    completed_matches.append(match_item)
 
-            if team_score >= match_data["target_score"]:
+        for match_item in completed_matches:
+            await message.channel.send(
+                f"\n🎉🎉 축하합니다! "
+                f"'{my_team}' 팀이 내기 [{match_item['match_id']}]의 "
+                f"목표 점수({match_item['target_score']}점)에 가장 먼저 도달했습니다! 🎉🎉"
+            )
 
-                await message.channel.send(
-                    f"\n🎉🎉 축하합니다! "
-                    f"'{my_team}' 팀이 "
-                    f"목표 점수("
-                    f"{match_data['target_score']}점"
-                    f")에 가장 먼저 도달했습니다! 🎉🎉"
-                )
+            await match_result_display(message.channel, match_item)
+            active_matches.remove(match_item)
+            save_data()
 
-                await match_result_display(
-                    message.channel
-                )
-
-                reset_all_data()
-
-                await message.channel.send(
-                    "🧹 내기가 종료되어 "
-                    "모든 팀이 해산되고 "
-                    "점수가 초기화되었습니다."
-                )
+            await message.channel.send(
+                f"🧹 내기 [{match_item['match_id']}]가 종료되었습니다."
+            )
 
         return
 
-    # 2. 점수 입력이 아니라면 일반 봇 명령어(!팀생성, !명령어 등) 처리 수행
+    # 2. 점수 입력이 아니라면 일반 봇 명령어 처리 수행
     await bot.process_commands(message)
-
 
 # ==========================================
 # 👥 팀 생성
@@ -404,14 +347,11 @@ async def create_team(
     ctx,
     team_name: str
 ):
-
     if team_name in teams:
-
         await ctx.send(
             f"❌ '{team_name}'(은)는 "
             f"이미 존재하는 팀입니다."
         )
-
         return
 
     teams[team_name] = {
@@ -425,7 +365,6 @@ async def create_team(
         f"✅ '{team_name}' 팀이 생성되었습니다."
     )
 
-
 # ==========================================
 # 👤 팀 등록
 # ==========================================
@@ -436,7 +375,6 @@ async def join_team(
     team_name: str,
     member: discord.Member = None
 ):
-
     target_user = (
         member
         if member
@@ -447,42 +385,29 @@ async def join_team(
         target_user.id
     )
 
-    # 다른 사람 등록은 관리자만 가능
     if (
         member
         and not ctx.author.guild_permissions.administrator
     ):
-
         await ctx.send(
             "❌ 다른 사용자를 팀에 등록하려면 "
             "관리자 권한이 필요합니다."
         )
-
         return
 
     if team_name not in teams:
-
         await ctx.send(
             f"❌ '{team_name}'(은)는 "
             f"존재하지 않는 팀입니다."
         )
-
         return
 
     if user_id_str in user_team:
-
-        current_team = user_team[user_id_str]
-
-        await ctx.send(
-            f"❌ {target_user.mention}님은 "
-            f"이미 '{current_team}' 팀에 "
-            f"소속되어 있습니다."
-        )
-
-        return
+        old_team = user_team[user_id_str]
+        if old_team in teams and user_id_str in teams[old_team]["members"]:
+            del teams[old_team]["members"][user_id_str]
 
     teams[team_name]["members"][user_id_str] = 0
-
     user_team[user_id_str] = team_name
 
     save_data()
@@ -492,9 +417,8 @@ async def join_team(
         f"'{team_name}' 팀에 등록되었습니다."
     )
 
-
 # ==========================================
-# 🔥 내기 시작
+# 🔥 내기 시작 (월일시각 자동 ID 생성 및 복수 내기 지원)
 # ==========================================
 
 @bot.command(name="내기시작")
@@ -502,288 +426,134 @@ async def start_match(
     ctx,
     *args
 ):
-
     if len(args) < 2:
-
         await ctx.send(
-            "⚠️ 사용법: "
-            "`!내기시작 [팀이름1] "
-            "[팀이름2] ... [목표점수]`"
+            "⚠️ 사용법:\n"
+            "`!내기시작 [팀1] [팀2] [목표점수]` (내기 이름 자동생성: 월일시각, 예: 082119)\n"
+            "`!내기시작 [내기이름] [팀1] [팀2] [목표점수]`"
         )
-
         return
 
     try:
-
         target_score = int(
             args[-1]
         )
-
     except ValueError:
-
         await ctx.send(
             "❌ 마지막 입력값은 "
             "목표 점수(숫자)여야 합니다."
         )
-
         return
 
-    target_teams = list(
-        args[:-1]
-    )
+    middle_args = args[:-1]
+    now_str = datetime.now().strftime("%m%d%H")
 
-    user_id_str = str(
-        ctx.author.id
-    )
+    if len(middle_args) >= 2 and middle_args[0] not in teams:
+        match_id = middle_args[0]
+        participating_teams = list(middle_args[1:])
+    else:
+        match_id = now_str
+        participating_teams = list(middle_args)
 
-    my_team = user_team.get(
-        user_id_str
-    )
+    base_id = match_id
+    counter = 1
+    while any(m["match_id"] == match_id for m in active_matches):
+        match_id = f"{base_id}_{counter}"
+        counter += 1
 
-    if not my_team:
-
-        await ctx.send(
-            "❌ 본인이 소속된 팀이 있어야 "
-            "내기를 시작할 수 있습니다."
-        )
-
-        return
-
-    if my_team not in target_teams:
-
-        target_teams.append(
-            my_team
-        )
-
-    for team_name in target_teams:
-
+    for team_name in participating_teams:
         if team_name not in teams:
-
             await ctx.send(
                 f"❌ '{team_name}'(은)는 "
                 f"존재하지 않는 팀입니다."
             )
-
             return
 
-    # 중복 제거
-    target_teams = list(
-        dict.fromkeys(target_teams)
+    participating_teams = list(
+        dict.fromkeys(participating_teams)
     )
 
-    match_data["is_active"] = True
+    new_match = {
+        "match_id": match_id,
+        "is_active": True,
+        "target_score": target_score,
+        "participating_teams": participating_teams
+    }
 
-    match_data["target_score"] = target_score
-
-    match_data["participating_teams"] = target_teams
-
+    active_matches.append(new_match)
     save_data()
 
     await ctx.send(
-        f"🔥 내기가 시작되었습니다! 🔥\n"
-        f"> ⚔️ 참여 팀: {', '.join(target_teams)}\n"
+        f"🔥 새로운 내기가 시작되었습니다! (식별 ID: `{match_id}`) 🔥\n"
+        f"> ⚔️ 참여 팀: {', '.join(participating_teams)}\n"
         f"> 🎯 목표 점수: {target_score}점"
     )
 
-
 # ==========================================
-# 📊 점수 확인
-# ==========================================
-
-@bot.command(name="점수")
-async def check_score(ctx):
-
-    user_id_str = str(
-        ctx.author.id
-    )
-
-    my_team = user_team.get(
-        user_id_str
-    )
-
-    if not my_team:
-
-        await ctx.send(
-            "❌ 소속된 팀이 없습니다."
-        )
-
-        return
-
-    if my_team not in teams:
-
-        await ctx.send(
-            "❌ 팀 데이터를 찾을 수 없습니다."
-        )
-
-        return
-
-    team_score = teams[my_team]["score"]
-
-    if (
-        match_data["is_active"]
-        and my_team in match_data["participating_teams"]
-    ):
-
-        left = (
-            match_data["target_score"]
-            - team_score
-        )
-
-        await ctx.send(
-            f"📊 [{my_team}] "
-            f"현재 팀 점수: {team_score}점 "
-            f"(목표까지 {left}점 남음)"
-        )
-
-    else:
-
-        await ctx.send(
-            f"📊 [{my_team}] "
-            f"현재 팀 점수: {team_score}점"
-        )
-
-
-# ==========================================
-# 📈 내기 현황
+# 📈 현황 (모든 진행 중인 내기 한 번에 조회)
 # ==========================================
 
 @bot.command(name="현황")
 async def match_status(ctx):
-
-    if not match_data["is_active"]:
-
+    if not active_matches:
         await ctx.send(
             "⚠️ 현재 진행 중인 내기가 없습니다."
         )
-
         return
 
-    user_id_str = str(
-        ctx.author.id
-    )
-
-    my_team = user_team.get(
-        user_id_str
-    )
-
-    target = match_data["target_score"]
-
-    participating_teams = (
-        match_data["participating_teams"]
-    )
-
-    sorted_teams = sorted(
-        participating_teams,
-        key=lambda t: teams[t]["score"],
-        reverse=True
-    )
-
     embed = discord.Embed(
-        title="📈 현재 솔랭 내기 현황",
+        title="📈 전체 솔랭 내기 현황",
         color=discord.Color.green()
     )
 
-    for i, team_name in enumerate(sorted_teams):
+    for idx, match_item in enumerate(active_matches):
+        match_id = match_item["match_id"]
+        target_score = match_item["target_score"]
+        participating_teams = match_item["participating_teams"]
 
-        team_score = teams[team_name]["score"]
-
-        left = target - team_score
-
-        member_texts = []
-
-        for (
-            uid_str,
-            personal_score
-        ) in teams[team_name]["members"].items():
-
-            try:
-
-                user = ctx.guild.get_member(
-                    int(uid_str)
-                )
-
-                name = (
-                    user.display_name
-                    if user
-                    else "알수없음"
-                )
-
-            except Exception:
-
-                name = "알수없음"
-
-            member_texts.append(
-                f"{name} ({personal_score}점)"
-            )
-
-        members_str = (
-            ", ".join(member_texts)
-            if member_texts
-            else "팀원 없음"
+        sorted_teams = sorted(
+            participating_teams,
+            key=lambda t: teams.get(t, {}).get("score", 0),
+            reverse=True
         )
 
-        diff_str = ""
+        team_status_lines = []
+        for i, team_name in enumerate(sorted_teams):
+            team_score = teams.get(team_name, {}).get("score", 0)
+            left = target_score - team_score
 
-        if (
-            my_team
-            and my_team in participating_teams
-        ):
+            member_texts = []
+            team_members = teams.get(team_name, {}).get("members", {})
+            for uid_str, personal_score in team_members.items():
+                try:
+                    user = ctx.guild.get_member(
+                        int(uid_str)
+                    )
+                    name = (
+                        user.display_name
+                        if user
+                        else "알수없음"
+                    )
+                except Exception:
+                    name = "알수없음"
 
-            if team_name != my_team:
-
-                my_score = teams[my_team]["score"]
-
-                diff = (
-                    team_score
-                    - my_score
+                member_texts.append(
+                    f"{name} ({personal_score}점)"
                 )
 
-                sign = (
-                    "+"
-                    if diff > 0
-                    else ""
-                )
+            members_str = (
+                ", ".join(member_texts)
+                if member_texts
+                else "팀원 없음"
+            )
 
-                diff_str = (
-                    f" "
-                    f"(우리팀과 "
-                    f"{sign}{diff}점 차이)"
-                )
-
-            else:
-
-                diff_str = " (우리팀)"
-
-        else:
-
-            if i == 0:
-
-                diff_str = " (현재 1등 👑)"
-
-            else:
-
-                first_score = teams[
-                    sorted_teams[0]
-                ]["score"]
-
-                diff = (
-                    team_score
-                    - first_score
-                )
-
-                diff_str = (
-                    f" "
-                    f"(1등과 {diff}점 차이)"
-                )
+            team_status_lines.append(
+                f"{i + 1}위: {team_name} ({team_score}점 / 목표까지 {left}점)\n└ 팀원: {members_str}"
+            )
 
         embed.add_field(
-            name=f"{i + 1}위: {team_name}",
-            value=(
-                f"점수: {team_score}점"
-                f"{diff_str}\n"
-                f"목표까지: {left}점 남음\n"
-                f"팀원: {members_str}"
-            ),
+            name=f"[{idx + 1}] 내기 ID: {match_id} (목표: {target_score}점)",
+            value="\n".join(team_status_lines) if team_status_lines else "참여 팀 없음",
             inline=False
         )
 
@@ -791,65 +561,61 @@ async def match_status(ctx):
         embed=embed
     )
 
-
 # ==========================================
-# 🛑 내기 강제 종료
+# 🛑 내기 종료 (특정 ID 지정 가능)
 # ==========================================
 
 @bot.command(name="내기종료")
 @commands.has_permissions(
     administrator=True
 )
-async def force_end_match(ctx):
-
-    if not match_data["is_active"]:
-
-        reset_all_data()
-
+async def force_end_match(ctx, match_id: str = None):
+    if not active_matches:
         await ctx.send(
-            "🧹 모든 팀이 해산되고 "
-            "데이터가 초기화되었습니다."
+            "⚠️ 현재 진행 중인 내기가 없습니다."
         )
-
         return
 
-    await ctx.send(
-        "🛑 관리자에 의해 내기가 종료되었습니다. "
-        "결과를 발표합니다."
-    )
-
-    await match_result_display(
-        ctx.channel
-    )
-
-    reset_all_data()
-
-    await ctx.send(
-        "🧹 모든 팀이 해산되고 "
-        "점수가 완전히 초기화되었습니다."
-    )
-
-
-# ==========================================
-# 🏆 내기 결과
-# ==========================================
-
-@bot.command(name="내기결과")
-async def show_results(ctx):
-
-    if not match_data["participating_teams"]:
+    if match_id:
+        target_match = None
+        for m in active_matches:
+            if m["match_id"] == match_id:
+                target_match = m
+                break
+        if not target_match:
+            await ctx.send(
+                f"❌ 식별 ID가 `{match_id}`인 내기를 찾을 수 없습니다."
+            )
+            return
 
         await ctx.send(
-            "⚠️ 현재 진행 중인 내기가 없거나 "
-            "이미 해산되었습니다."
+            f"🛑 관리자에 의해 내기 `{match_id}`가 종료되었습니다. 결과를 발표합니다."
         )
+        await match_result_display(ctx.channel, target_match)
 
-        return
+        active_matches.remove(target_match)
+        save_data()
+        await ctx.send(
+            f"🧹 내기 `{match_id}`가 정리되었습니다."
+        )
+    else:
+        if len(active_matches) == 1:
+            target_match = active_matches[0]
+            await ctx.send(
+                f"🛑 관리자에 의해 내기 `{target_match['match_id']}`가 종료되었습니다. 결과를 발표합니다."
+            )
+            await match_result_display(ctx.channel, target_match)
 
-    await match_result_display(
-        ctx.channel
-    )
-
+            active_matches.clear()
+            save_data()
+            await ctx.send(
+                "🧹 모든 내기가 종료되고 정리되었습니다."
+            )
+        else:
+            ids = ", ".join([m["match_id"] for m in active_matches])
+            await ctx.send(
+                f"⚠️ 진행 중인 내기가 여러 개입니다. 종료할 ID를 지정해주세요.\n> 목록 ID: {ids}"
+            )
 
 # ==========================================
 # 📜 명령어 안내
@@ -876,11 +642,10 @@ async def show_help(ctx):
     embed.add_field(
         name="🔥 내기 및 점수",
         value=(
-            "`!내기시작 [팀1] [팀2] ... [목표점수]` - 내기를 시작합니다.\n"
-            "`+점수` 또는 `-점수` (예: `+15`, `-10`) - 채팅창에 입력하면 팀과 본인 점수가 반영됩니다.\n"
-            "`!점수` - 내 소속 팀의 현재 점수와 남은 점수를 확인합니다.\n"
-            "`!현황` - 현재 진행 중인 내기의 전체 순위와 점수 차이를 확인합니다.\n"
-            "`!내기결과` - 현재 내기 결과(순위)를 다시 출력합니다."
+            "`!내기시작 [팀1] [팀2] ... [목표점수]` - 내기를 시작합니다. (이름 미지정 시 월일시각 자동생성)\n"
+            "`!내기시작 [내기이름] [팀1] [팀2] ... [목표점수]` - 이름을 지정하여 내기를 시작합니다.\n"
+            "`+점수` 또는 `-점수` (예: `+15`, `-10`, `23`) - 채팅창에 입력하면 팀과 본인 점수가 반영됩니다.\n"
+            "`!현황` - 현재 진행 중인 모든 내기의 순위와 점수 차이를 확인합니다."
         ),
         inline=False
     )
@@ -888,13 +653,13 @@ async def show_help(ctx):
     embed.add_field(
         name="⚙️ 관리자 전용",
         value=(
-            "`!내기종료` - 강제로 내기를 종료하고 결과를 발표한 뒤 초기화합니다."
+            "`!내기종료` - 진행 중인 내기가 1개일 때 강제 종료합니다.\n"
+            "`!내기종료 [내기ID]` - 특정 내기를 지정하여 강제로 종료합니다."
         ),
         inline=False
     )
 
     await ctx.send(embed=embed)
-
 
 # ==========================================
 # ❌ 명령어 오류 처리
@@ -905,52 +670,43 @@ async def on_command_error(
     ctx,
     error
 ):
-
     if isinstance(
         error,
         commands.MissingRequiredArgument
     ):
-
         await ctx.send(
             "❌ 명령어 사용법이 잘못되었습니다."
         )
-
         return
 
     if isinstance(
         error,
         commands.MissingPermissions
     ):
-
         await ctx.send(
             "❌ 이 명령어를 사용하려면 "
             "관리자 권한이 필요합니다."
         )
-
         return
 
     if isinstance(
         error,
         commands.MemberNotFound
     ):
-
         await ctx.send(
             "❌ 해당 사용자를 찾을 수 없습니다."
         )
-
         return
 
     if isinstance(
         error,
         commands.CommandNotFound
     ):
-
         return
 
     print(
         f"🚨 명령어 오류: {repr(error)}"
     )
-
 
 # ==========================================
 # 🚀 Bot 실행
@@ -959,15 +715,12 @@ async def on_command_error(
 print("🚀 Discord Bot을 시작합니다...")
 
 try:
-
     bot.run(
         DISCORD_TOKEN
     )
 
 except Exception as e:
-
     print(
         f"🚨 Discord Bot 실행 실패: {e}"
     )
-
     raise
