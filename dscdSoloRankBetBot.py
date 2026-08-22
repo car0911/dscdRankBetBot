@@ -269,6 +269,13 @@ async def on_ready():
     print(f"🆔 Bot ID: {bot.user.id}")
     print("=" * 50)
 
+    # 🔹 슬래시 명령어 동기화 추가
+    try:
+        synced = await bot.tree.sync()
+        print(f"🔄 슬래시 명령어 {len(synced)}개 동기화 완료!")
+    except Exception as e:
+        print(f"🚨 슬래시 명령어 동기화 실패: {e}")
+
     if not hasattr(bot, "web_server_started"):
         bot.web_server_started = True
         bot.loop.create_task(
