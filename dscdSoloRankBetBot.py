@@ -783,36 +783,26 @@ async def force_end_match(ctx, match_id: str = None):
             )
 
 # ==========================================
-# 🔄 전체 초기화 (텍스트 입력 및 Ephemeral 방식)
+# 🔄 전체 초기화 (슬래시 명령어 + Ephemeral + 입력 확인 방식)
 # ==========================================
 
-@bot.command(name="초기화")
-@commands.has_permissions(administrator=True)
-async def reset_command(ctx):
-    # 1. 사용자가 친 !초기화 명령어 메시지 삭제 시도
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
+@bot.tree.command(name="초기화", description="전체 팀, 개인 점수, 진행 중인 내기 및 기록을 초기화합니다. (관리자 전용)")
+async def slash_reset_command(interaction: discord.Interaction):
+    # 관리자 권한 체크
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 이 명령어를 사용하려면 관리자 권한이 필요합니다.", ephemeral=True)
+        return
 
-    # 2. 상호작용(슬래시 명령어 여부 등)을 고려해 나에게만 보이는 메시지(Ephemeral) 전송
+    # 나에게만 보이는(ephemeral=True) 경고 메시지 전송
     warning_text = (
         "⚠️ [경고] 모든 팀 정보, 개인 점수, 진행 중인 내기 및 기록이 전부 삭제/초기화됩니다.\n"
         "정말로 초기화하시겠습니까? 초기화하려면 30초 내에 채팅창에 `초기화한다`를 입력해주세요."
     )
+    await interaction.response.send_message(warning_text, ephemeral=True)
 
-    if ctx.interaction:
-        await ctx.interaction.response.send_message(warning_text, ephemeral=True)
-        # ephemeral 메시지 객체 가져오기
-        msg = await ctx.interaction.original_response()
-    else:
-        # 일반 텍스트 명령어로 들어온 경우 인터랙션을 활용할 수 없으므로 채널에 보내되 안내 (또는 웹훅/상호작용 유도)
-        # 봇 구조상 일반 메시지 명령어에서는 ephemeral을 완벽하게 지원하기 어렵지만, 슬래시나 interaction 컨텍스트가 아닐 때를 대비한 처리
-        msg = await ctx.send(warning_text)
-
-    # 3. 30초 동안 사용자가 "초기화한다"를 입력하는지 대기
+    # 30초 동안 사용자가 채널에 "초기화한다"를 입력하는지 대기
     def check(m):
-        return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.strip() == "초기화한다"
+        return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id and m.content.strip() == "초기화한다"
 
     try:
         user_reply = await bot.wait_for("message", timeout=30.0, check=check)
@@ -826,8 +816,8 @@ async def reset_command(ctx):
         # 전체 초기화 실행
         reset_all_data()
 
-        # 완료 안내 메시지 전송 (Ephemeral 효과를 위해 채널에 잠깐 보냈다가 지우거나 안내)
-        success_msg = await ctx.send(f"⚠️ {ctx.author.mention} 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다.")
+        # 완료 안내 메시지 전송 후 5초 뒤 삭제
+        success_msg = await interaction.channel.send(f"⚠️ {interaction.user.mention} 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다.")
         await asyncio.sleep(5)
         try:
             await success_msg.delete()
@@ -835,7 +825,7 @@ async def reset_command(ctx):
             pass
 
     except asyncio.TimeoutError:
-        timeout_msg = await ctx.send(f"❌ {ctx.author.mention} 초기화 시간이 초과되어 취소되었습니다.")
+        timeout_msg = await interaction.channel.send(f"❌ {interaction.user.mention} 초기화 시간이 초과되어 취소되었습니다.")
         await asyncio.sleep(5)
         try:
             await timeout_msg.delete()
