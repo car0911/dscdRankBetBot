@@ -126,7 +126,7 @@ def reset_all_data():
     save_data()
 
 # ==========================================
-# 🏆 경기 결과 표시 (특정 내기 대상)
+# 🏆 경기 결과 표시 및 점수 정산 처리
 # ==========================================
 
 async def match_result_display(channel, match_item):
@@ -195,7 +195,21 @@ async def match_result_display(channel, match_item):
 
     await channel.send(embed=embed)
 
+    # 1. 완료된 내기를 finished_matches로 이동
     finished_matches.append(match_item)
+
+    # 2. [디버그 핵심] 현재 남아있는 '다른 활성 내기'가 있는지 확인
+    # 방금 끝난 match_item은 이미 active_matches에서 제거되었거나 제거될 예정이므로,
+    # active_matches에 남아있는 개수가 0개일 때만 점수를 0으로 리셋합니다.
+    if not active_matches:
+        for t_name in teams:
+            teams[t_name]["score"] = 0
+            for uid in teams[t_name]["members"]:
+                teams[t_name]["members"][uid] = 0
+        await channel.send("🧹 진행 중인 모든 내기가 종료되어 모든 팀과 개인의 점수가 초기화되었습니다.")
+    else:
+        await channel.send("ℹ️ 아직 진행 중인 다른 내기가 있으므로 점수 초기화는 보류됩니다.")
+
     save_data()
 
 # ==========================================
