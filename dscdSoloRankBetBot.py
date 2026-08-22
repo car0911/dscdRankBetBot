@@ -783,45 +783,64 @@ async def force_end_match(ctx, match_id: str = None):
             )
 
 # ==========================================
-# 🔄 전체 초기화 (버튼 및 Ephemeral 인터랙션 방식)
+# 🔄 전체 초기화 (텍스트 입력 및 Ephemeral 방식)
 # ==========================================
-
-class ResetConfirmView(discord.ui.View):
-    def __init__(self, author_id):
-        super().__init__(timeout=30)
-        self.author_id = author_id
-
-    @discord.ui.button(label="초기화한다", style=discord.ButtonStyle.danger)
-    async def confirm_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ 본인의 요청에만 응답할 수 있습니다.", ephemeral=True)
-            return
-
-        # 전체 데이터 초기화 실행
-        reset_all_data()
-
-        for item in self.children:
-            item.disabled = True
-        
-        await interaction.response.edit_message(
-            content="⚠️ 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다.",
-            view=self
-        )
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
 
 @bot.command(name="초기화")
 @commands.has_permissions(administrator=True)
 async def reset_command(ctx):
-    view = ResetConfirmView(ctx.author.id)
-    await ctx.send(
+    # 1. 사용자가 친 !초기화 명령어 메시지 삭제 시도
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    # 2. 상호작용(슬래시 명령어 여부 등)을 고려해 나에게만 보이는 메시지(Ephemeral) 전송
+    warning_text = (
         "⚠️ [경고] 모든 팀 정보, 개인 점수, 진행 중인 내기 및 기록이 전부 삭제/초기화됩니다.\n"
-        "정말로 초기화하시겠습니까?",
-        view=view,
-        ephemeral=True if hasattr(ctx, "interaction") else False
+        "정말로 초기화하시겠습니까? 초기화하려면 30초 내에 채팅창에 `초기화한다`를 입력해주세요."
     )
+
+    if ctx.interaction:
+        await ctx.interaction.response.send_message(warning_text, ephemeral=True)
+        # ephemeral 메시지 객체 가져오기
+        msg = await ctx.interaction.original_response()
+    else:
+        # 일반 텍스트 명령어로 들어온 경우 인터랙션을 활용할 수 없으므로 채널에 보내되 안내 (또는 웹훅/상호작용 유도)
+        # 봇 구조상 일반 메시지 명령어에서는 ephemeral을 완벽하게 지원하기 어렵지만, 슬래시나 interaction 컨텍스트가 아닐 때를 대비한 처리
+        msg = await ctx.send(warning_text)
+
+    # 3. 30초 동안 사용자가 "초기화한다"를 입력하는지 대기
+    def check(m):
+        return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.strip() == "초기화한다"
+
+    try:
+        user_reply = await bot.wait_for("message", timeout=30.0, check=check)
+        
+        # 사용자가 입력한 "초기화한다" 메시지 삭제
+        try:
+            await user_reply.delete()
+        except Exception:
+            pass
+
+        # 전체 초기화 실행
+        reset_all_data()
+
+        # 완료 안내 메시지 전송 (Ephemeral 효과를 위해 채널에 잠깐 보냈다가 지우거나 안내)
+        success_msg = await ctx.send(f"⚠️ {ctx.author.mention} 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다.")
+        await asyncio.sleep(5)
+        try:
+            await success_msg.delete()
+        except Exception:
+            pass
+
+    except asyncio.TimeoutError:
+        timeout_msg = await ctx.send(f"❌ {ctx.author.mention} 초기화 시간이 초과되어 취소되었습니다.")
+        await asyncio.sleep(5)
+        try:
+            await timeout_msg.delete()
+        except Exception:
+            pass
 
 # ==========================================
 # 📜 기록 조회 및 삭제 명령어
