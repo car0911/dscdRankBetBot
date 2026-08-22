@@ -783,6 +783,47 @@ async def force_end_match(ctx, match_id: str = None):
             )
 
 # ==========================================
+# 🔄 전체 초기화 (버튼 및 Ephemeral 인터랙션 방식)
+# ==========================================
+
+class ResetConfirmView(discord.ui.View):
+    def __init__(self, author_id):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+
+    @discord.ui.button(label="초기화한다", style=discord.ButtonStyle.danger)
+    async def confirm_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ 본인의 요청에만 응답할 수 있습니다.", ephemeral=True)
+            return
+
+        # 전체 데이터 초기화 실행
+        reset_all_data()
+
+        for item in self.children:
+            item.disabled = True
+        
+        await interaction.response.edit_message(
+            content="⚠️ 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다.",
+            view=self
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+@bot.command(name="초기화")
+@commands.has_permissions(administrator=True)
+async def reset_command(ctx):
+    view = ResetConfirmView(ctx.author.id)
+    await ctx.send(
+        "⚠️ [경고] 모든 팀 정보, 개인 점수, 진행 중인 내기 및 기록이 전부 삭제/초기화됩니다.\n"
+        "정말로 초기화하시겠습니까?",
+        view=view,
+        ephemeral=True if hasattr(ctx, "interaction") else False
+    )
+
+# ==========================================
 # 📜 기록 조회 및 삭제 명령어
 # ==========================================
 
