@@ -862,9 +862,7 @@ async def show_finished_matches(ctx):
     ]
 
     if not visible_matches:
-        await ctx.send(
-            "📜 완료된 내기 기록이 없습니다."
-        )
+        await ctx.send("📜 완료된 내기 기록이 없습니다.")
         return
 
     embed = discord.Embed(
@@ -873,17 +871,33 @@ async def show_finished_matches(ctx):
     )
 
     for m in visible_matches:
-        teams_str = ", ".join(
-            m.get(
-                "participating_teams", []
-            )
-        )
+        match_id = m['match_id']
+        target_score = m.get('target_score')
+        participating_teams = m.get('participating_teams', [])
+        
+        # 저장된 당시의 팀/팀원 정보를 바탕으로 텍스트 구성
+        team_lines = []
+        for team_name in participating_teams:
+            # 현재 teams 데이터나 혹은 매치 내에 저장된 정보 활용 (현재 코드 구조상 teams 딕셔너리 참조)
+            team_data = teams.get(team_name, {})
+            t_score = team_data.get("score", 0)
+            members_dict = team_data.get("members", {})
+            
+            member_texts = []
+            for uid_str, p_score in members_dict.items():
+                try:
+                    user = ctx.guild.get_member(int(uid_str))
+                    name = user.display_name if user else "알수없음"
+                except Exception:
+                    name = "알수없음"
+                member_texts.append(f"{name} ({p_score}점)")
+            
+            members_str = ", ".join(member_texts) if member_texts else "팀원 없음"
+            team_lines.append(f"🛡️ {team_name} ({t_score}점)\n└ 팀원: {members_str}")
+
         embed.add_field(
-            name=f"ID: {m['match_id']}",
-            value=(
-                f"참여팀: {teams_str} "
-                f"(목표: {m.get('target_score')}점)"
-            ),
+            name=f"ID: {match_id} (목표: {target_score}점)",
+            value="\n".join(team_lines) if team_lines else "참여 팀 없음",
             inline=False
         )
 
@@ -1016,15 +1030,24 @@ async def on_command_error(
 # 🚀 Bot 실행
 # ==========================================
 
-print("🚀 Discord Bot을 시작합니다...")
+async def main():
+    while True:
+        try:
+            print("🚀 Discord Bot을 시작합니다...")
+            await bot.start(DISCORD_TOKEN)
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                print("🚨 [429 Rate Limit] 디스코드 API 차단 감지! 15분간 대기 후 안전하게 재시도합니다...")
+                await asyncio.sleep(900)  # 15분 대기
+            else:
+                print(f"🚨 HTTP 에러 발생 ({e.status}): {e}")
+                await asyncio.sleep(60)
+        except Exception as e:
+            print(f"🚨 예상치 못한 에러 발생: {e}")
+            await asyncio.sleep(60)
 
-try:
-    bot.run(
-        DISCORD_TOKEN
-    )
-
-except Exception as e:
-    print(
-        f"🚨 Discord Bot 실행 실패: {e}"
-    )
-    raise
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("봇을 수동으로 종료합니다.")
