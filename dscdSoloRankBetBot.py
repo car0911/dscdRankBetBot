@@ -8,6 +8,23 @@ import asyncio
 import aiohttp
 from aiohttp import web
 import pymongo
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+# 1. Render 포트 스캔을 통과하기 위한 가짜 웹 서버 클래스
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+
+# 2. 백그라운드에서 웹 서버 실행 (디스코드 봇과 동시 구동)
+threading.Thread(target=run_web_server, daemon=True).start()
 
 # ==========================================
 # ⚙️ 환경변수
