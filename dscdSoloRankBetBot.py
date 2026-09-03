@@ -795,8 +795,20 @@ async def force_end_match(ctx, match_id: str = None):
 
 @bot.tree.command(name="초기화", description="전체 팀, 개인 점수, 진행 중인 내기 및 기록을 초기화합니다. (관리자 전용)")
 async def slash_reset_command(interaction: discord.Interaction):
-    # 1. 관리자 권한 체크
-    if not interaction.user.guild_permissions.administrator:
+    # 0. 서버 내 사용 여부 및 Member 객체 안전하게 가져오기
+    if interaction.guild is None:
+        await interaction.response.send_message("❌ 이 명령어는 서버 내에서만 사용할 수 있습니다.", ephemeral=True)
+        return
+
+    member = interaction.guild.get_member(interaction.user.id)
+    if member is None:
+        try:
+            member = await interaction.guild.fetch_member(interaction.user.id)
+        except Exception:
+            member = None
+
+    # 1. 관리자 권한 체크 (안전한 member 객체 사용)
+    if member is None or not member.guild_permissions.administrator:
         await interaction.response.send_message("❌ 이 명령어를 사용하려면 관리자 권한이 필요합니다.", ephemeral=True)
         return
 
@@ -805,22 +817,22 @@ async def slash_reset_command(interaction: discord.Interaction):
 
     # 3. 사용자에게 경고 메시지 전송 (followup 사용)
     warning_text = (
-        "⚠️ **[경고]** 모든 팀 정보, 개인 점수, 진행 중인 내기 및 기록이 **전부 삭제/초기화**됩니다.\n"
-        "정말로 초기화하시겠습니까? 초기화하려면 30초 내에 이 채널에 **`초기화한다`**를 입력해주세요."
+        "⚠️ [경고] 모든 팀 정보, 개인 점수, 진행 중인 내기 및 기록이 전부 삭제/초기화됩니다.\n"
+        "정말로 초기화하시겠습니까? 초기화하려면 30초 내에 이 채널에 `초기화한다`를 입력해주세요."
     )
     await interaction.followup.send(warning_text, ephemeral=True)
 
     # 4. 30초 동안 대기
     def check(m):
         return (
-            m.author.id == interaction.user.id 
-            and m.channel.id == interaction.channel.id 
+            m.author.id == interaction.user.id
+            and m.channel.id == interaction.channel.id
             and m.content.strip() == "초기화한다"
         )
 
     try:
         user_reply = await bot.wait_for("message", timeout=30.0, check=check)
-        
+
         # 사용자가 입력한 "초기화한다" 메시지 삭제 시도
         try:
             await user_reply.delete()
@@ -832,7 +844,7 @@ async def slash_reset_command(interaction: discord.Interaction):
 
         # 6. 완료 메시지 전송 후 5초 뒤 삭제
         success_msg = await interaction.channel.send(
-            f"⚠️ **{interaction.user.mention} 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다.**"
+            f"⚠️ {interaction.user.mention} 관리자에 의해 모든 팀, 개인 점수, 진행 중인 내기 및 기록이 완전히 초기화되었습니다."
         )
         await asyncio.sleep(5)
         try:
